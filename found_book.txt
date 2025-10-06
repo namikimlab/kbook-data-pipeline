@@ -1,0 +1,58 @@
+{
+  "@id": "nlk:KMO201465552",
+  "@type": [
+    "bibo:Book",
+    "nlon:OfflineMaterial",
+    "nlon:Book"
+  ],
+  "extent": [
+    "20 cm",
+    "336 p"
+  ],
+  "bibframe:language": "http://lod.nl.go.kr/language/kor",
+  "place": "http://lod.nl.go.kr/countries/ulk",
+  "classificationNumberOfNLK": "833.6",
+  "datePublished": "2025-08-13T16:36:07^^http://www.w3.org/2001/XMLSchema#dateTime",
+  "ddc": "895.635",
+  "ddcn": "http://lod.nl.go.kr/ddc/895_e21",
+  "editionOfDDC": "21",
+  "editionOfKDC": "5",
+  "issuedYear": "2014",
+  "itemNumberOfNLK": "14-408",
+  "kdc": "833.6",
+  "kdcn": "http://lod.nl.go.kr/kdc/833_e5",
+  "languageNote": "일본어 원작을 한국어로 번역",
+  "localHolding": [
+    "EM6012317",
+    "JE52915, 3",
+    "EM6012318, 2"
+  ],
+  "publicationPlace": "서울",
+  "typeOfData": "nlk:dt_gm",
+  "creator": [
+    "히가시노 게이고",
+    "김난주"
+  ],
+  "publisher": "재인",
+  "alternative": "仮面山荘殺人事件",
+  "dcterms:creator": [
+    {
+      "@id": "nlk:KAC200300667"
+    },
+    {
+      "@id": "nlk:KAC201009348"
+    }
+  ],
+  "description": "원저자명: 東野圭吾",
+  "issued": "2014",
+  "language": "http://id.loc.gov/vocabulary/languages/kor",
+  "subject": [
+    "nlk:KSH1998029926",
+    "nlk:KSH2005011449"
+  ],
+  "title": "가면산장 살인사건",
+  "isbn": "9788990982575",
+  "label": "가면산장 살인사건 / 지은이: 히가시노 게이고 ; 옮긴이: 김난주",
+  "seeAlso": "http://book.naver.com/bookdb/book_detail.php?bid=8273055",
+  "sameAs": "https://data.nanet.go.kr/resource/NANET_BOK_205610"
+}

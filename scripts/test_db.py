@@ -1,5 +1,4 @@
-# using Session pooler 
-
+# test_db.py using Session pooler 
 import psycopg
 import os
 from dotenv import load_dotenv
