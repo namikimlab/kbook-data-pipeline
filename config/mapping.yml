@@ -1,0 +1,19 @@
+columns:
+  source_id: "@id"
+  title: "title"
+  subtitle: "remainderOfTitle"
+  authors:
+    - "creator"
+    - "dcterms:creator"
+  subjects: "subject"
+  publisher: "publisher"
+  pub_year:
+    - "issuedYear"
+    - "issued"
+  series: "titleOfSeries"
+  volume:
+    - "volumeOfSeries"
+    - "volume"
+  isbn13: "isbn"
+
+extra_fields_keep: true   # store all other keys in extra

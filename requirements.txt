@@ -1,0 +1,9 @@
+# core
+psycopg2
+psycopg[binary]
+ijson
+pyyaml
+python-dotenv
+
+# optional (dev)
+tqdm        # progress bar for long loads
