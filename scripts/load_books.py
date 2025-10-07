@@ -1,92 +1,88 @@
-import os, re, json, ijson, yaml, psycopg
-from dotenv import load_dotenv
+# scripts/load_books.py
+import json
+import ijson
+import re
 from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
 
-load_dotenv()
-DB_URL = os.getenv("SUPABASE_DB_URL")
-BATCH_SIZE = 500
+BOOK_FILE = Path("data/book_sample.json")
+YEAR_RE = re.compile(r"\b(1\d{3}|20\d{2})\b")
 
-# --- helpers --------------------------------------------------------------
+def extract_list(v: Any) -> Optional[List[str]]:
+    """Return v as a list[str]: list -> as-is; str -> [str]; dict -> label/name/@id/json; else None."""
+    def _one(x: Any) -> Optional[str]:
+        if x is None:
+            return None
+        if isinstance(x, dict):
+            # prefer human label, then name, then @id, else JSON string
+            return (x.get("label") or x.get("name") or x.get("@id") or json.dumps(x, ensure_ascii=False)).strip()
+        return str(x).strip()
 
-def clean_isbn(isbn: str | None) -> str | None:
-    if not isbn:
+    if v is None:
         return None
-    digits = re.sub(r"[^0-9Xx]", "", isbn)
-    return digits if digits else None
+    if isinstance(v, list):
+        out = [s for s in (_one(x) for x in v) if s]
+        return out or None
+    s = _one(v)
+    return [s] if s else None
 
-def extract_year(raw):
-    if not raw:
-        return None
-    m = re.search(r"(19|20)\d{2}", raw)
-    return int(m.group()) if m else None
-
-# --- mapper ---------------------------------------------------------------
-
-def map_node(node: dict, mapping: dict) -> dict:
-    """Map JSON-LD node to flat dict for books table."""
-    out = {}
-    cols = mapping["columns"]
-
-    for col, key in cols.items():
-        val = None
-        if isinstance(key, list):
-            for k in key:
-                if k in node:
-                    val = node[k]
-                    break
-        else:
-            val = node.get(key)
-
-        # Normalize some
-        if col == "isbn13":
-            val = clean_isbn(val)
-        elif col == "pub_year":
-            val = extract_year(val)
-        elif col in ("authors", "subjects"):
-            val = val if isinstance(val, list) else [val] if val else []
-        out[col] = val
-
-    # Store all leftovers in extra
-    mapped_keys = {k for v in cols.values() for k in ([v] if isinstance(v, str) else v)}
-    extra = {k: v for k, v in node.items() if k not in mapped_keys}
-    out["extra"] = json.dumps(extra)
-    return out
-
-# --- loader ---------------------------------------------------------------
-
-def upsert_batch(conn, rows):
-    if not rows:
-        return
-    cols = rows[0].keys()
-    placeholders = ", ".join(f"%({c})s" for c in cols)
-    col_list = ", ".join(cols)
-    updates = ", ".join(f"{c}=excluded.{c}" for c in cols if c != "book_id")
-    sql = f"""
-        INSERT INTO books ({col_list})
-        VALUES ({placeholders})
-        ON CONFLICT (source_id) DO UPDATE SET {updates};
+def parse_pub_year(item: Dict[str, Any]) -> Optional[int]:
     """
-    with conn.cursor() as cur:
-        cur.executemany(sql, rows)
-    conn.commit()
+    Return a clean pub_year if 1000–2099.
+    If another 4-digit number is found, leave pub_year None
+    and let ingest keep it in 'extra'.
+    """
+    y = item.get("issuedYear")
+    if isinstance(y, str) and y.isdigit() and len(y) == 4:
+        if YEAR_RE.fullmatch(y):
+            return int(y)
+        else:
+            return None
 
-# --- main ----------------------------------------------------------------
+    issued = item.get("issued")
+    if isinstance(issued, str):
+        m = YEAR_RE.search(issued)
+        if m:
+            return int(m.group(1))
+        else:
+            # found some 4-digit year but not in 1000–2099
+            # don’t normalize to pub_year, so it will stay in extra
+            return None
 
-def main():
-    mapping = yaml.safe_load(Path("config/mapping.yml").read_text())
-    path = Path("data/book.json")
+    return None
 
-    with psycopg.connect(DB_URL) as conn:
-        rows = []
-        for node in ijson.items(path.open("r", encoding="utf-8"), "@graph.item"):
-            rows.append(map_node(node, mapping))
-            if len(rows) >= BATCH_SIZE:
-                upsert_batch(conn, rows)
-                print(f"Inserted {len(rows)} rows…")
-                rows.clear()
-        if rows:
-            upsert_batch(conn, rows)
-            print(f"Inserted final {len(rows)} rows.")
+def to_row(item: Dict[str, Any]) -> Dict[str, Any]:
+    mapped_keys = {
+        "@id","title","remainderOfTitle","creator","subject",
+        "publisher","issuedYear","issued","titleOfSeries","volumeOfSeries","volume","isbn"
+    }
+    return {
+        "source_id": item.get("@id"),
+        "title": item.get("title"),
+        "subtitle": item.get("remainderOfTitle"),
+        "authors": extract_list(item.get("creator")),   # only 'creator'
+        "subjects": extract_list(item.get("subject")),   # reuse the same helper
+        "publisher": item.get("publisher"),
+        "pub_year": parse_pub_year(item),
+        "series": item.get("titleOfSeries"),
+        "volume": item.get("volumeOfSeries") or item.get("volume"),
+        "isbn13": item.get("isbn"),
+        "extra": {k: v for k, v in item.items() if k not in mapped_keys},
+    }
 
-if __name__ == "__main__":
-    main()
+def load_books(path: Path = BOOK_FILE) -> Iterable[Dict[str, Any]]:
+    """
+    Stream rows from a JSON-LD file with top-level @graph.
+    Yields one mapped dict per @graph item.
+    """
+    with path.open("rb") as f:  # ijson prefers binary mode
+        for item in ijson.items(f, "@graph.item"):
+            row = to_row(item)
+            # Skip rows with no primary key
+            if not row.get("source_id"):
+                # optional: print or log a minimal note; keeping silent is okay too
+                # print("Skipping item with no @id")
+                continue
+            yield row
+
+
