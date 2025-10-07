@@ -1,9 +1,10 @@
 # scripts/load_books.py
 import json
-import ijson
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+from psycopg.types.json import Json
+
 
 BOOK_FILE = Path("data/book_sample.json")
 YEAR_RE = re.compile(r"\b(1\d{3}|20\d{2})\b")
@@ -67,21 +68,18 @@ def to_row(item: Dict[str, Any]) -> Dict[str, Any]:
         "series": item.get("titleOfSeries"),
         "volume": item.get("volumeOfSeries") or item.get("volume"),
         "isbn13": item.get("isbn"),
-        "extra": {k: v for k, v in item.items() if k not in mapped_keys},
+        "extra": Json({k: v for k, v in item.items() if k not in mapped_keys}),
     }
 
-def load_books(path: Path = BOOK_FILE) -> Iterable[Dict[str, Any]]:
-    """
-    Stream rows from a JSON-LD file with top-level @graph.
-    Yields one mapped dict per @graph item.
-    """
-    with path.open("rb") as f:  # ijson prefers binary mode
-        for item in ijson.items(f, "@graph.item"):
+def load_books(path: Path) -> Iterable[Dict]:
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            item = json.loads(line)
             row = to_row(item)
-            # Skip rows with no primary key
             if not row.get("source_id"):
-                # optional: print or log a minimal note; keeping silent is okay too
-                # print("Skipping item with no @id")
                 continue
             yield row
 
