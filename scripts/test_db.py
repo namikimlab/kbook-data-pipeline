@@ -3,7 +3,6 @@ import psycopg
 import os
 from dotenv import load_dotenv
 
-# Load .env 
 load_dotenv()
 
 conn_str = os.getenv("POOLER_CONN")

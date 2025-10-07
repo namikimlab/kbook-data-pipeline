@@ -52,6 +52,19 @@ def parse_pub_year(item: Dict[str, Any]) -> Optional[int]:
 
     return None
 
+def is_korean_book(item: dict) -> bool:
+    """Return True if any language field contains 'kor' (case-insensitive)."""
+    for key in ("language", "bibframe:language", "dcterms:language"):
+        val = item.get(key)
+        if val is None:
+            continue
+        # normalize to a list of strings
+        vals = val if isinstance(val, list) else [val]
+        # accept if any entry contains 'kor'
+        if any("kor" in str(x).lower() for x in vals):
+            return True
+    return False
+
 def to_row(item: Dict[str, Any]) -> Dict[str, Any]:
     mapped_keys = {
         "@id","title","remainderOfTitle","creator","subject",
@@ -78,6 +91,8 @@ def load_books(path: Path) -> Iterable[Dict]:
             if not line:
                 continue
             item = json.loads(line)
+            if not is_korean_book(item):
+                continue
             row = to_row(item)
             if not row.get("source_id"):
                 continue

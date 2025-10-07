@@ -1,4 +1,5 @@
 # scripts/ingest_books.py
+# python3 scripts/ingest_books.py --file data/book.ndjson --batch 1000
 import os
 import time
 import json
@@ -7,6 +8,8 @@ import logging
 import math
 from pathlib import Path
 from typing import Iterable, Dict, Any, List, Tuple
+from itertools import islice
+
 
 import psycopg
 from dotenv import load_dotenv
@@ -134,6 +137,7 @@ def main() -> int:
     p.add_argument("--logfile", default="ingest.log", help="Log file path")
     p.add_argument("--failed-file", default="failed_rows.jsonl", help="Where to write failed rows (JSONL)")
     p.add_argument("--dry-run", action="store_true", help="Parse only; no DB writes")
+    p.add_argument("--resume-lines", type=int, default=0, help="Skip this many NDJSON lines before ingesting (for resume)")
     args = p.parse_args()
 
     setup_logging(args.logfile)
@@ -165,11 +169,18 @@ def main() -> int:
     total_batches = math.ceil(total_rows / args.batch)
     logging.info(f"Total rows={total_rows}, total_batches={total_batches}")
 
+    # Build stream, with optional resume skip
+    rows_stream = load_books(Path(args.file))
+    if args.resume_lines:
+        from itertools import islice
+        rows_stream = islice(rows_stream, args.resume_lines, None)
+        logging.info("Resuming after %d lines", args.resume_lines)
+
     try:
         with psycopg.connect(conn_str) as conn:
             conn.execute("set application_name to 'books_ingest_stream';")
             total_seen, ok_ingested, failed_rows = upsert_stream(
-                conn, load_books(Path(args.file)), args.batch, failed_path, total_batches
+                conn, rows_stream, args.batch, failed_path, total_batches
             )
         # Completeness check
         if total_seen == ok_ingested + failed_rows:

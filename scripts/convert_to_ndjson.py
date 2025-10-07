@@ -1,5 +1,5 @@
 # scripts/convert_to_ndjson.py
-#!/usr/bin/env python3
+# python3 scripts/convert_to_ndjson.py --infile data/book.json --outfile data/book.ndjson
 import json
 import argparse
 from pathlib import Path
