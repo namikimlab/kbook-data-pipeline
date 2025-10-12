@@ -1,5 +1,3 @@
-mkdir -p scripts
-cat > scripts/fetch_one_page.py <<'PY'
 import os, json, time, random, requests, psycopg
 from dotenv import load_dotenv
 
