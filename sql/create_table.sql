@@ -1,36 +1,18 @@
--- 1) Core table
-create table if not exists public.books (
-  source_id   text primary key,          -- maps "@id"
-  title       text,                      -- "title"
-  subtitle    text,                      -- "remainderOfTitle"
-  authors     text[],                    -- ["creator", "dcterms:creator"] flattened to text[]
-  subjects    text[],                    -- "subject" flattened to text[]
-  publisher   text,                      -- "publisher"
-  pub_year    int,                       -- "issuedYear" or year(issued); null if unknown
-  series      text,                      -- "titleOfSeries"
-  volume      text,                      -- "volumeOfSeries" or "volume"
-  isbn13      text,                      -- "isbn" (may be null / multiple forms)
-  extra       jsonb,                     -- keep all other keys here
-  created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+-- raw payloads (bronze)
+create table if not exists public.raw_nl_books (
+  id bigserial primary key,
+  fetched_at timestamptz not null default now(),
+  page_no int,
+  source_record jsonb not null,
+  rec_hash text generated always as (md5(source_record::text)) stored,
+  unique(rec_hash)
 );
 
--- 2) Helpful indexes (optional but recommended)
-create unique index if not exists books_isbn13_uniq
-  on public.books (isbn13) where isbn13 is not null;
-
-create index if not exists books_subjects_gin on public.books using gin (subjects);
-create index if not exists books_authors_gin  on public.books using gin (authors);
-create index if not exists books_extra_gin    on public.books using gin (extra);
-
--- 3) Keep updated_at fresh on updates
-create or replace function set_updated_at() returns trigger as $$
-begin
-  new.updated_at := now();
-  return new;
-end; $$ language plpgsql;
-
-drop trigger if exists trg_books_updated_at on public.books;
-create trigger trg_books_updated_at
-before update on public.books
-for each row execute function set_updated_at();
+-- forward sync cursor
+create table if not exists public.sync_state (
+  id bigserial primary key,
+  job_name text unique not null,                  -- e.g., 'nl_forward'
+  last_input_date_synced date,                    -- latest INPUT_DATE you’ve seen
+  last_update_sweep_through date,                 -- last day you re-checked updates
+  last_run_at timestamptz default now()
+);

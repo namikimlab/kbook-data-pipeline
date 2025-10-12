@@ -1,0 +1,3 @@
+NL_CERT_KEY="YOUR_KEY_HERE"
+TODAY=$(date +"%Y%m%d")
+curl -s "https://www.nl.go.kr/seoji/SearchApi.do?cert_key=$NL_CERT_KEY&result_style=json&page_no=1&page_size=5&sort=INPUT_DATE&order_by=DESC" | jq .
