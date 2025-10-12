@@ -47,4 +47,4 @@ if __name__ == "__main__":
     page_no = 1
     docs = fetch_page(page_no, page_size=5)
     insert_records(docs, page_no)
-PY
+
