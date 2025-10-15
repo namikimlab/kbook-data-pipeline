@@ -32,7 +32,6 @@ WITH ranked AS (
     source_record->>'PUBLISH_PREDATE'       AS publish_predate,
     source_record->>'EBOOK_YN'              AS ebook_yn,
     source_record->>'TITLE_URL'             AS cover_url,
-    source_record->>'DDC'                   AS ddc,                   -- 듀이십진분류
     source_record->>'SUBJECT'               AS subject,               -- 주제 (KDC 대분류)
     source_record->>'BOOK_INTRODUCTION'     AS book_introduction, -- 책소개 URL
 

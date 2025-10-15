@@ -1,7 +1,7 @@
-# scripts/fetch_pages_month.py
-import os, json, time, random, requests, psycopg, math
+import os, json, time, random, requests, psycopg, argparse
 from datetime import date
 from dotenv import load_dotenv
+
 load_dotenv()
 
 NL_CERT_KEY = os.getenv("NL_CERT_KEY")
@@ -12,12 +12,10 @@ def yyyymmdd(d: date) -> str:
 
 def month_bounds(year: int, month: int):
     start = date(year, month, 1)
-    # simple month-end calc
     if month == 12:
-        end = date(year + 1, 1, 1)  # exclusive helper
+        end = date(year + 1, 1, 1)
     else:
         end = date(year, month + 1, 1)
-    # inclusive end (last day of month)
     end_inclusive = end.fromordinal(end.toordinal() - 1)
     return yyyymmdd(start), yyyymmdd(end_inclusive)
 
@@ -25,7 +23,10 @@ def fetch_page(page_no=1, page_size=50, max_retries=5,
                start_publish_date=None, end_publish_date=None,
                sort="INPUT_DATE", order_by="ASC"):
     """
-    Note: start/end are for PUBLISH_PREDATE; not INPUT_DATE.
+    Returns: (docs, total_count, ok)
+      - docs: list
+      - total_count: int | None
+      - ok: bool (False iff we exhausted retries / network error)
     """
     url = "https://www.nl.go.kr/seoji/SearchApi.do"
     params = {
@@ -45,16 +46,18 @@ def fetch_page(page_no=1, page_size=50, max_retries=5,
 
     for attempt in range(max_retries):
         try:
-            r = requests.get(url, params=params, headers=headers, timeout=(5, 45))
+            # longer read timeout to avoid false "end of data"
+            r = requests.get(url, params=params, headers=headers, timeout=(5, 90))
             r.raise_for_status()
             payload = r.json() or {}
             docs = payload.get("docs", []) or []
-            total_count = payload.get("TOTAL_COUNT")  # may be None
-            return docs, total_count
+            total_count = payload.get("TOTAL_COUNT")
+            return docs, total_count, True
         except requests.exceptions.RequestException as e:
-            print(f"Attempt {attempt+1}/{max_retries}: {e}")
+            print(f"Attempt {attempt+1}/{max_retries} for page {page_no}: {e}")
             time.sleep(3 * (attempt + 1))
-    return [], None
+    # failed all retries: signal error distinctly
+    return [], None, False
 
 def insert_records(records, page_no):
     if not records:
@@ -70,16 +73,13 @@ def insert_records(records, page_no):
     print(f"✅ Inserted {len(records)} from page {page_no}")
     return len(records)
 
-def backfill_month(year: int, month: int, page_size: int = 50, pages_per_run: int = None):
-    """
-    Fetch all pages for a given publish month (bounded by start/end_publish_date).
-    pages_per_run: if provided, limits how many pages we attempt this invocation (optional).
-    """
+def backfill_month(year: int, month: int, page_size: int = 50,
+                   start_page: int = 1, pages_per_run: int = None):
     start_str, end_str = month_bounds(year, month)
     print(f"▶ Backfill month {year}-{month:02d} (publish window {start_str}..{end_str})")
     t0 = time.time()
 
-    page_no = 1
+    page_no = max(1, start_page)
     total_inserted = 0
     total_count_snapshot = None
     pages_done = 0
@@ -89,18 +89,27 @@ def backfill_month(year: int, month: int, page_size: int = 50, pages_per_run: in
             print("Reached pages_per_run cap; stopping this invocation.")
             break
 
-        docs, total_count = fetch_page(
+        docs, total_count, ok = fetch_page(
             page_no=page_no,
             page_size=page_size,
             start_publish_date=start_str,
             end_publish_date=end_str,
-            sort="INPUT_DATE",     # keep INPUT_DATE for stable crawl inside the slice
+            sort="INPUT_DATE",
             order_by="ASC"
         )
-        if total_count is not None and total_count_snapshot is None:
+
+        # snapshot only on first successful page
+        if ok and total_count is not None and total_count_snapshot is None:
             total_count_snapshot = total_count
 
+        if not ok:
+            # Network/API error: DO NOT advance page_no. Pause so you can resume this same page.
+            print(f"⚠️  Pausing on page {page_no} due to network error. "
+                  f"Resume with --start-page {page_no}")
+            break
+
         if not docs:
+            # True end-of-data only when ok==True and zero docs returned.
             print("No more docs for this month slice. Stopping.")
             break
 
@@ -111,15 +120,28 @@ def backfill_month(year: int, month: int, page_size: int = 50, pages_per_run: in
         # polite pacing
         time.sleep(random.uniform(2.5, 5.0))
 
-        # optional early stop if last page smaller than page_size (likely exhausted)
+        # Likely exhausted when last page smaller than page_size (ok==True)
         if len(docs) < page_size:
             print("Last page smaller than page_size — month likely exhausted.")
             break
 
     elapsed = time.time() - t0
-    print(f"⏱ Elapsed: {elapsed:.1f}s | Inserted this run: {total_inserted}" +
-          (f" | TOTAL_COUNT snapshot: {total_count_snapshot}" if total_count_snapshot is not None else ""))
+    print(f"⏱ Elapsed: {elapsed:.1f}s | Inserted this run: {total_inserted}"
+          + (f" | TOTAL_COUNT snapshot: {total_count_snapshot}" if total_count_snapshot is not None else ""))
 
 if __name__ == "__main__":
-    # For this timing experiment: run exactly 2025-01, full month
-    backfill_month(2025, 1, page_size=50, pages_per_run=None)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--year", type=int, required=True)
+    parser.add_argument("--month", type=int, required=True)
+    parser.add_argument("--start-page", type=int, default=1)
+    parser.add_argument("--page-size", type=int, default=50)
+    parser.add_argument("--pages-per-run", type=int, default=None)
+    args = parser.parse_args()
+
+    backfill_month(
+        year=args.year,
+        month=args.month,
+        page_size=args.page_size,
+        start_page=args.start_page,
+        pages_per_run=args.pages_per_run
+    )
