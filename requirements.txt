@@ -1,9 +1,9 @@
 # core
-psycopg2
 psycopg[binary]
 ijson
 pyyaml
 python-dotenv
+requests
 
 # optional (dev)
 tqdm        # progress bar for long loads
