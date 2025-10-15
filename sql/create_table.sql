@@ -16,6 +16,9 @@ CREATE TABLE public.sync_state (
   run_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- AFTER daily ingest completes:
+REFRESH MATERIALIZED VIEW CONCURRENTLY public.books_public;
+
 -- Silver 
 CREATE MATERIALIZED VIEW public.books_public AS
 WITH ranked AS (
