@@ -134,7 +134,7 @@ if __name__ == "__main__":
     parser.add_argument("--year", type=int, required=True)
     parser.add_argument("--month", type=int, required=True)
     parser.add_argument("--start-page", type=int, default=1)
-    parser.add_argument("--page-size", type=int, default=50)
+    parser.add_argument("--page-size", type=int, default=100)
     parser.add_argument("--pages-per-run", type=int, default=None)
     args = parser.parse_args()
 
