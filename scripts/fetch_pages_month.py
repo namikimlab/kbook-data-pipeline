@@ -73,8 +73,20 @@ def insert_records(records, page_no):
     print(f"✅ Inserted {len(records)} from page {page_no}")
     return len(records)
 
-def backfill_month(year: int, month: int, page_size: int = 50,
-                   start_page: int = 1, pages_per_run: int = None):
+def backfill_month(year, month, page_size=50, start_page=1, pages_per_run=None,
+                    state_dir=os.path.expanduser("~/nlk-state")):
+    
+    # compute state file + load start page if present:
+    state_file = os.path.join(state_dir, f"{year}-{month:02d}.page")
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, "r") as f:
+                saved = int(f.read().strip() or "1")
+                start_page = max(start_page, saved)
+                print(f"↩️  Resuming from checkpoint file: start_page={start_page}")
+        except Exception as e:
+            print(f"⚠️  Could not read state file {state_file}: {e}")
+
     start_str, end_str = month_bounds(year, month)
     print(f"▶ Backfill month {year}-{month:02d} (publish window {start_str}..{end_str})")
     t0 = time.time()
@@ -103,10 +115,8 @@ def backfill_month(year: int, month: int, page_size: int = 50,
             total_count_snapshot = total_count
 
         if not ok:
-            # Network/API error: DO NOT advance page_no. Pause so you can resume this same page.
-            print(f"⚠️  Pausing on page {page_no} due to network error. "
-                  f"Resume with --start-page {page_no}")
-            break
+            print(f"⚠️  Network error on page {page_no}. Will auto-resume this same page.")
+            import sys; sys.exit(75)
 
         if not docs:
             # True end-of-data only when ok==True and zero docs returned.
@@ -114,6 +124,15 @@ def backfill_month(year: int, month: int, page_size: int = 50,
             break
 
         total_inserted += insert_records(docs, page_no)
+
+        # After each successful page insert, write next page:
+        try:
+            os.makedirs(state_dir, exist_ok=True)
+            with open(state_file, "w") as f:
+                f.write(str(page_no + 1))
+        except Exception as e:
+            print(f"⚠️  Could not write state file {state_file}: {e}")
+
         pages_done += 1
         page_no += 1
 
@@ -136,6 +155,7 @@ if __name__ == "__main__":
     parser.add_argument("--start-page", type=int, default=1)
     parser.add_argument("--page-size", type=int, default=100)
     parser.add_argument("--pages-per-run", type=int, default=None)
+    parser.add_argument("--state-dir", type=str, default=os.path.expanduser("~/nlk-state"))
     args = parser.parse_args()
 
     backfill_month(
