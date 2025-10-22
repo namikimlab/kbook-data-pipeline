@@ -1,150 +1,206 @@
-# 📚 NL OpenAPI Ingestion to Supabase
+# 📚 Kbooks Backfill Pipeline
 
-Automated ETL pipeline that collects book metadata from the **National Library of Korea’s OpenAPI (서지정보 SearchAPI)**, normalizes it, and loads it into **Supabase Postgres** for use in the [책판(KBooks)](https://github.com/namikimlab/kbooks-site) project.
+Automates downloading historical bibliographic data from the **National Library of Korea (NLK) Seoji API** and injects them into DB.  
 
-## 🧭 Overview
+Designed to be 
+- **resilient**
+-  **fully automatic**
+-  **restart-safe** — ideal for long-running EC2 jobs.
 
-This project connects to [`https://www.nl.go.kr/seoji/SearchApi.do`](https://www.nl.go.kr/seoji/SearchApi.do) to collect bibliographic data about published and upcoming books in Korea.
+## 🧠 Overview
 
-The goal is to:
+Each month’s data is fetched from the NLK API using the script `fetch_pages_month.py`.
+The new `run_all_months.py` manager loops through all months sequentially,
+handling network errors, restarts, and progress tracking automatically.
 
-1. **Fetch** newly registered or updated books daily.
-2. **Backfill** older data in chronological windows.
-3. **Normalize** and **store** book data in a structured Postgres schema.
-4. **Expose** clean, public-safe views to the KBooks frontend.
+### ✅ Key Features
 
-## 🏗️ Architecture
+* Resume exactly where it left off, even after EC2 restarts
+* Automatic retries and restarts via **systemd**
+* Checkpoint files to track progress per month
+* Idempotent inserts into Postgres (using `rec_hash`)
+* Zero manual intervention once started
 
-```
-                ┌────────────────────┐
-                │  NL OpenAPI (JSON) │
-                └─────────┬──────────┘
-                          │
-                    (psycopg / requests)
-                          │
-            ┌─────────────┴──────────────┐
-            │  raw_nl_books (Bronze)     │
-            │  - full jsonb              │
-            │  - fetched_at, page_no     │
-            └─────────────┬──────────────┘
-                          │ transform
-                          ▼
-            ┌─────────────┴──────────────┐
-            │  books_nl (Silver)         │
-            │  - normalized columns      │
-            │  - isbn13 / fallback_id    │
-            │  - dedup + upsert          │
-            └─────────────┬──────────────┘
-                          │ view
-                          ▼
-            ┌─────────────┴──────────────┐
-            │  books_public (Gold)       │
-            │  - public RLS read only    │
-            │  - used by Next.js app     │
-            └────────────────────────────┘
-```
-
-## ⚙️ Flow Design
-
-| Flow                     | Schedule    | Purpose                                       |
-| ------------------------ | ----------- | --------------------------------------------- |
-| `nl_forward_sync_daily`  | Every night | Pull new books by `INPUT_DATE`                |
-| `nl_recent_update_check` | 3-day cycle | Refresh last 14 days for updates              |
-| `nl_backfill_weekly`     | Weekly      | Fetch older data by `PUBLISH_PREDATE` windows |
-| `nl_health_check`        | Daily       | Validate counts, errors, dedup rates          |
-
-Each run updates a `sync_state` or `backfill_state` table to resume safely.
-
-
-## 🧩 Key Design Points
-
-* **Incremental ingestion** using `INPUT_DATE` sort order.
-* **Idempotent upsert** by `isbn13` or SHA-256 fallback key.
-* **Normalization** of titles, authors, ISBNs, and date formats.
-* **Language filter** (optional) for Korean books.
-* **Cover caching** into Supabase Storage (optional).
-* **Retry + backoff** logic for rate limits and API errors.
-* **Structured logging & DLQ** for failed records.
-
-## 🗃️ Database Schema
-
-**`raw_nl_books`**
-
-| column        | type        | note                    |
-| ------------- | ----------- | ----------------------- |
-| id            | bigserial   | primary key             |
-| fetched_at    | timestamptz | ingestion timestamp     |
-| source_record | jsonb       | full API payload        |
-| page_no       | int         | API page number         |
-| hash          | text        | md5 or sha256 of record |
-
-**`books_nl`**
-Normalized form used by app queries.
-Includes: `isbn13`, `title`, `authors`, `publisher`, `publish_date`, `form`, `cover_url`, `ebook_yn`, etc.
-
-**`books_public` (view)**
-Publicly readable subset with non-sensitive columns for frontend use.
-RLS allows `SELECT` to `anon` and `authenticated`.
-
-
-## 🔐 Secrets
-
-| Variable                    | Description                  |
-| --------------------------- | ---------------------------- |
-| `NL_CERT_KEY`               | Your API key from NL OpenAPI |
-| `SUPABASE_URL`              | Supabase project URL         |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service key for ingestion    |
-| `SUPABASE_DB_URL`           | Postgres connection string   |
-
-Store them in `.env` or Secret Manager.
-Never commit `.env` to Git.
-
-
-## 🚀 Run Modes
-
-### 1. Local (manual)
+## ⚙️ Folder Structure
 
 ```bash
-python fetch_nl_books.py --mode daily --since 20251010
+/home/ec2-user/kbook-data-pipeline/
+│
+├── scripts/
+│   ├── fetch_pages_month.py    # Fetches one month's worth of NLK data
+│   └── run_all_months.py       # Master manager that loops over all months
+│
+├── .env                        # API key and DB URL (used via dotenv)
+└── ~/nlk-state/                # Progress tracking folder
+    ├── months.list             # All months in target years (2000-01 ~ 2024-12)
+    ├── 2000-01.page            # Last page fetched for this month
+    ├── 2000-01.done            # Indicates month completed
+    ├── 2000-02.page
+    └── ...
 ```
 
-### 2. Scheduled
 
-* Cron or Kestra flow triggers the above script.
-* Store state in `sync_state` table.
+## 🗃️ Database Table
 
+All raw data is stored in:
 
+```sql
+public.raw_nl_books (
+  id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  page_no INT,
+  fetched_at TIMESTAMPTZ DEFAULT now(),
+  source_record JSONB NOT NULL,
+  rec_hash TEXT GENERATED ALWAYS AS (md5(source_record::text)) STORED,
+  UNIQUE(rec_hash)
+);
+```
 
-## 📊 Monitoring
-
-* ✅ **Row count trend** (new / updated)
-* 🕒 **Average fetch duration**
-* ⚠️ **Error ratio**
-* 📚 **Top publishers & subjects**
-* Tools: Supabase SQL editor, Metabase, or Grafana.
-
-
-
-## 🔄 Backfill Strategy
-
-* Crawl by 30-day `PUBLISH_PREDATE` windows (descending).
-* Stop when earliest year reached or `TOTAL_COUNT=0`.
-* Maintain `backfill_state` table for resuming.
+This guarantees **deduplication** and safe re-runs.
 
 
+## 🚀 How It Works
 
-## 🧠 Future Enhancements
+1. `run_all_months.py` reads `months.list` (2000-01 → 2024-12).
+2. For each month:
 
-* Parallel fetching for faster backfill.
-* Smart diffing by `UPDATE_DATE`.
-* Supabase function for weekly ranking refresh.
-* Data quality dashboard (ISBN validity, missing covers).
+   * If `<month>.done` exists → skip.
+   * Else → run `fetch_pages_month.py`.
+   * Each successful page updates `<month>.page`.
+   * When the API returns no more results, the script creates `<month>.done`.
+3. If a network error or EC2 restart occurs:
 
-## 📎 References
-
-* 📘 API Docs: [국립중앙도서관 서지정보 OpenAPI](https://www.nl.go.kr/contents/N30501030700.do)
-* 📦 Supabase: [https://supabase.com/docs](https://supabase.com/docs)
-* 🔧 Related repo: [namikimlab/kbooks-site](https://github.com/namikimlab/kbooks-site)
+   * `systemd` restarts the process.
+   * The script resumes the same month, same page.
+4. When all months are done → the service stops automatically.
 
 
-https://lod.nl.go.kr/home/
+## 🔧 Running the Pipeline
+
+### 1️⃣ Start manually (test mode)
+
+```bash
+cd /home/ec2-user/kbook-data-pipeline
+./scripts/run_all_months.py
+```
+
+### 2️⃣ Run automatically with systemd
+
+A systemd service keeps the job running 24/7:
+
+`/etc/systemd/system/nlk-history.service`
+
+```ini
+[Unit]
+Description=NLK full-history backfill manager (2000-01 -> 2024-12)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/kbook-data-pipeline
+ExecStart=/home/ec2-user/kbook-data-pipeline/venv/bin/python /home/ec2-user/kbook-data-pipeline/scripts/run_all_months.py
+Restart=on-failure
+RestartSec=30s
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable + start it:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now nlk-history.service
+```
+
+View logs:
+
+```bash
+journalctl -u nlk-history.service -f
+```
+
+Verify status 
+```bash
+sudo systemctl status nlk-history.service
+```
+
+
+## 📈 Monitoring Progress
+
+Check current state:
+
+```bash
+ls ~/nlk-state | grep -E '\.done$' | wc -l     # Count completed months
+ls ~/nlk-state | grep -E '\.page$'             # Current active month
+```
+
+Query DB counts for a month:
+
+```sql
+SELECT count(*) 
+FROM public.raw_nl_books
+WHERE to_date(source_record->>'PUBLISH_PREDATE','YYYYMMDD')
+      BETWEEN DATE '2005-01-01' AND DATE '2005-01-31';
+```
+
+
+## 🧩 Restart & Recovery
+
+| Situation       | What happens                                                 |
+| --------------- | ------------------------------------------------------------ |
+| EC2 reboot      | systemd restarts service automatically                       |
+| Network timeout | `fetch_pages_month.py` exits non-zero → systemd restarts it  |
+| Manual stop     | `systemctl stop nlk-history.service` (safe, progress saved)  |
+| Resume          | `systemctl start nlk-history.service` (resumes from `.page`) |
+| Re-run a month  | Delete `<month>.done` (and optional `.page`)                 |
+
+---
+
+## 🛠️ Configuration Notes
+
+* `.env` file should contain:
+
+  ```
+  NL_CERT_KEY=your_nlk_api_key
+  SUPABASE_DB_URL=postgresql://...
+  ```
+* Page size default = 100 (set via `NLK_PAGE_SIZE` env var if needed).
+* Edit sleep between months in `run_all_months.py` (`SLEEP_BETWEEN_MONTHS_SEC`).
+
+
+## ✅ Summary
+
+| Feature       | Description                       |
+| ------------- | --------------------------------- |
+| Automation    | Fully autonomous 25-year backfill |
+| Resilience    | Auto-restart and resume           |
+| Deduplication | MD5-based rec_hash                |
+| Storage       | PostgreSQL (Supabase)             |
+| Supervisor    | systemd                           |
+| State         | Files in `~/nlk-state`            |
+| Runtime       | ~30 minutes per month             |
+
+
+### Example Completion Folder (after several days)
+
+```bash
+~/nlk-state/
+├── 2000-01.done
+├── 2000-02.done
+├── ...
+├── 2005-03.page    
+├── 2005-04
+├── ...
+└── 2024-12.done
+```
+
+When you see **2024-12.done**, you’re done 🎉
+
+##  References
+National Library of Korea — API Documentation: https://www.nl.go.kr/NL/contents/N31101010000.do
+
+---
+💫 by Nami Kim
+[Portfolio](https://namikimlab.github.io/) | [GitHub](https://github.com/namikimlab) | [Blog](https://namixkim.com) | [LinkedIn](https://linkedin.com/in/namixkim)
