@@ -65,7 +65,7 @@ def insert_records(records, page_no):
     with psycopg.connect(DB_URL) as conn, conn.cursor() as cur:
         for rec in records:
             cur.execute("""
-                INSERT INTO public.raw_nl_books (page_no, source_record)
+                INSERT INTO kbooks_raw.raw_nl_books (page_no, source_record)
                 VALUES (%s, %s)
                 ON CONFLICT (rec_hash) DO NOTHING;
             """, (page_no, json.dumps(rec)))
