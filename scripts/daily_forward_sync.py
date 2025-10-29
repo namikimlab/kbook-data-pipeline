@@ -50,7 +50,7 @@ def insert_records(conn, records, page_no):
     with conn.cursor() as cur:
         for rec in records:
             cur.execute("""
-                insert into public.raw_nl_books (page_no, source_record)
+                insert into kbooks_raw.raw_nl_books (page_no, source_record)
                 values (%s, %s)
                 on conflict (rec_hash) do nothing
             """, (page_no, json.dumps(rec)))
